@@ -6,15 +6,17 @@ from detectors.face_detector import FaceDetector
 from detectors.face_recognizer import FaceRecognizer
 from detectors.face_landmarks import FaceLandmarks
 from detectors.eye_state import EyeStateDetector
+from detectors.yawn_detector import YawnDetector
 
 # Initialize components
 face_detector = FaceDetector()
 face_recognizer = FaceRecognizer()
 face_landmarks = FaceLandmarks()
 eye_state_detector = EyeStateDetector()
+yawn_detector = YawnDetector()
 
 # Drowsy detection parameters
-DROWSY_FRAME_THRESHOLD = 15  # eyes closed for N frames = Drowsy
+DROWSY_FRAME_THRESHOLD = 5  # eyes closed for N frames = Drowsy
 closed_frames_counter = 0
 
 # Landmark optimization
@@ -72,21 +74,14 @@ try:
                         left_eye_crop = frame[ly1:ly2, lx1:lx2]
                         right_eye_crop = frame[ry1:ry2, rx1:rx2]
 
-                        # Skip if invalid crop
-                        if left_eye_crop.size == 0 or right_eye_crop.size == 0:
-                            continue
+                        # Resize immediately to the model’s expected 24x24 before prediction
+                        left_eye_img = cv2.resize(left_eye_crop, (24, 24))
+                        right_eye_img = cv2.resize(right_eye_crop, (24, 24))
 
-                        # Resize to 32x32 → required by model
-                        left_eye_img = cv2.resize(left_eye_crop, (32, 32))
-                        right_eye_img = cv2.resize(right_eye_crop, (32, 32))
-
-                        # DEBUG — show eye crops
-                        cv2.imshow('DEBUG Left Eye', cv2.resize(left_eye_img, (128, 128)))
-                        cv2.imshow('DEBUG Right Eye', cv2.resize(right_eye_img, (128, 128)))
-
-                        # Predict eye state
+                        # Predict using eye_state.py
                         left_eye_state = eye_state_detector.predict(left_eye_img)
                         right_eye_state = eye_state_detector.predict(right_eye_img)
+
 
                         # Draw eye states
                         cv2.putText(frame, f'Left Eye: {left_eye_state}', (lx1, ly2 + 20),
@@ -100,8 +95,9 @@ try:
                             closed_frames_counter += 1
                         else:
                             closed_frames_counter = 0
-
+                        print(f"Closed frames: {closed_frames_counter}")
                         if closed_frames_counter >= DROWSY_FRAME_THRESHOLD:
+                            print("😴 Drowsy driver detected!")
                             cv2.putText(frame, 'DROWSY DRIVER!', (50, 50),
                                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
 

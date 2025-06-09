@@ -34,6 +34,29 @@ class FaceLandmarks:
         landmarks[:, 1] += y1
 
         return landmarks
+        
+    def get_mouth_box(self, landmarks, scale_factor=1.5):
+        # Mouth landmarks (points 48–67)
+        mouth_points = landmarks[48:68]
+
+        x_min = np.min(mouth_points[:, 0])
+        y_min = np.min(mouth_points[:, 1])
+        x_max = np.max(mouth_points[:, 0])
+        y_max = np.max(mouth_points[:, 1])
+
+        cx = (x_min + x_max) / 2
+        cy = (y_min + y_max) / 2
+
+        w = (x_max - x_min) * scale_factor
+        h = (y_max - y_min) * scale_factor
+        size = max(w, h)
+
+        x1 = int(cx - size / 2)
+        y1 = int(cy - size / 2)
+        x2 = int(cx + size / 2)
+        y2 = int(cy + size / 2)
+
+        return (x1, y1, x2, y2)
 
     def get_eye_boxes(self, landmarks, scale_factor=1.2):
       """
