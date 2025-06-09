@@ -5,57 +5,118 @@ import os
 from detectors.face_detector import FaceDetector
 from detectors.face_recognizer import FaceRecognizer
 from detectors.face_landmarks import FaceLandmarks
+from detectors.eye_state import EyeStateDetector
 
 # Initialize components
 face_detector = FaceDetector()
 face_recognizer = FaceRecognizer()
 face_landmarks = FaceLandmarks()
+eye_state_detector = EyeStateDetector()
+
+# Drowsy detection parameters
+DROWSY_FRAME_THRESHOLD = 15  # eyes closed for N frames = Drowsy
+closed_frames_counter = 0
+
+# Landmark optimization
+LANDMARKS_EVERY_N_FRAMES = 5
+frame_counter = 0
 
 # Initialize camera
 cap = cv2.VideoCapture(0)
 
-# Main loop
-frame_count = 0
+try:
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-while True:
-    ret, frame = cap.read()
-    frame_count += 1
+        frame_counter += 1
 
-    # Only run landmarks every 5 frames
-    run_landmarks = (frame_count % 5 == 0)
+        # Detect faces
+        boxes = face_detector.detect_faces(frame)
 
-    boxes = face_detector.detect_faces(frame)
+        for box in boxes:
+            x1, y1, x2, y2 = box
 
-    for box in boxes:
-        x1, y1, x2, y2 = box
-        face_img = frame[y1:y2, x1:x2]
+            # Crop face
+            face_img = frame[y1:y2, x1:x2]
 
-        driver_name = face_recognizer.recognize(face_img)
+            # Safety check
+            if face_img.size == 0:
+                continue
 
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(frame, f'{driver_name}', (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+            # Recognize driver
+            driver_name = face_recognizer.recognize(face_img)
 
-        # Run landmarks only every N frames
-        if run_landmarks:
-            landmarks = face_landmarks.get_landmarks(frame, (x1, y1, x2, y2))
-            if landmarks is not None:
-                left_eye_box, right_eye_box = face_landmarks.get_eye_boxes(landmarks)
+            # Draw face box and name
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, f'{driver_name}', (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
 
-                lx1, ly1, lx2, ly2 = left_eye_box
-                rx1, ry1, rx2, ry2 = right_eye_box
+            # Run landmarks every N frames
+            if frame_counter % LANDMARKS_EVERY_N_FRAMES == 0:
+                try:
+                    landmarks = face_landmarks.get_landmarks(frame, (x1, y1, x2, y2))
 
-                cv2.rectangle(frame, (lx1, ly1), (lx2, ly2), (255, 0, 0), 2)
-                cv2.rectangle(frame, (rx1, ry1), (rx2, ry2), (255, 0, 0), 2)
+                    if landmarks is not None:
+                        left_eye_box, right_eye_box = face_landmarks.get_eye_boxes(landmarks, scale_factor=1.2)
 
+                        # Crop eye boxes with frame boundary clamp
+                        lx1, ly1, lx2, ly2 = left_eye_box
+                        rx1, ry1, rx2, ry2 = right_eye_box
 
-    # Show frame
-    cv2.imshow('Driver Monitoring System', frame)
+                        lx1 = max(0, lx1); ly1 = max(0, ly1); lx2 = min(frame.shape[1], lx2); ly2 = min(frame.shape[0], ly2)
+                        rx1 = max(0, rx1); ry1 = max(0, ry1); rx2 = min(frame.shape[1], rx2); ry2 = min(frame.shape[0], ry2)
 
-    # Press 'q' to quit
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+                        # Crop raw eye images
+                        left_eye_crop = frame[ly1:ly2, lx1:lx2]
+                        right_eye_crop = frame[ry1:ry2, rx1:rx2]
 
-# Release resources
-cap.release()
-cv2.destroyAllWindows()
+                        # Skip if invalid crop
+                        if left_eye_crop.size == 0 or right_eye_crop.size == 0:
+                            continue
+
+                        # Resize to 32x32 → required by model
+                        left_eye_img = cv2.resize(left_eye_crop, (32, 32))
+                        right_eye_img = cv2.resize(right_eye_crop, (32, 32))
+
+                        # DEBUG — show eye crops
+                        cv2.imshow('DEBUG Left Eye', cv2.resize(left_eye_img, (128, 128)))
+                        cv2.imshow('DEBUG Right Eye', cv2.resize(right_eye_img, (128, 128)))
+
+                        # Predict eye state
+                        left_eye_state = eye_state_detector.predict(left_eye_img)
+                        right_eye_state = eye_state_detector.predict(right_eye_img)
+
+                        # Draw eye states
+                        cv2.putText(frame, f'Left Eye: {left_eye_state}', (lx1, ly2 + 20),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+
+                        cv2.putText(frame, f'Right Eye: {right_eye_state}', (rx1, ry2 + 20),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+
+                        # Drowsy logic
+                        if left_eye_state == 'Closed' and right_eye_state == 'Closed':
+                            closed_frames_counter += 1
+                        else:
+                            closed_frames_counter = 0
+
+                        if closed_frames_counter >= DROWSY_FRAME_THRESHOLD:
+                            cv2.putText(frame, 'DROWSY DRIVER!', (50, 50),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+
+                except Exception as e:
+                    print(f"❌ Landmark / EyeState error: {e}")
+
+        # Show main frame
+        cv2.imshow('Driver Monitoring System', frame)
+
+        # Press 'q' to quit
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+finally:
+    # Always release camera
+    cap.release()
+    cv2.destroyAllWindows()
+    print("✅ Camera released, window closed. App exited safely.")
