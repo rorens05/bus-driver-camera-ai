@@ -1,0 +1,5 @@
+opencv-python
+torch
+facenet-pytorch
+numpy
+face-alignment
